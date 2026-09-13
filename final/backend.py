@@ -20,12 +20,26 @@ import json
 import time
 import threading
 import requests
-import numpy as np
+import subprocess, numpy as np
 from pathlib import Path
 from bbos import Reader, Writer, Type, Config
 from collections import deque
 
 app = FastAPI()
+CFG = Config("speaker")
+
+def say(text):
+    raw = subprocess.run(["espeak-ng", text, "--stdout"], capture_output=True).stdout
+    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    ratio = CFG.sample_rate / 22050
+    pcm = np.repeat(pcm, max(1, round(ratio)))
+    pad = (-len(pcm)) % CFG.chunk_size
+    pcm = np.pad(pcm, (0, pad))
+    chunks = pcm.reshape(-1, CFG.chunk_size, CFG.channels)
+    with Writer("speaker.audio", Type("speaker_audio")) as w:
+        for chunk in chunks:
+            with w.buf() as b:
+                b["audio"] = (chunk * 32767).astype(np.int16)
 
 API_URL = "http://100.66.141.212:8000"
 
@@ -69,11 +83,11 @@ def close_arms_until_contact(vert_left, r_left, r_right, w_left, w_right, w_torq
     right_active = True
 
     t0 = time.time()
-    for i in range(len(frames)):
+    for i in range(0, len(frames), 2):
         target = t0 + frames[i]["t"]
         now = time.time()
         if target > now:
-            time.sleep((target - now) * 0.5)
+            time.sleep((target - now) * 0.25)
         mvmt = np.array(frames[i]["left"], dtype=np.float32)
         mvmt[0] = vert_left # do not move vertically
         mvmt[4] = 0.1
@@ -115,7 +129,8 @@ def arms_up(hug_left, hug_right, r_left, r_right, w_left, w_right):
     ARMS_UP_POLL_INTERVAL = 0.02       # seconds between writes
     ARMS_UP_READ_INTERVAL = 0.5        # seconds between reader checks (reader is stale faster than this)
 
-    ANOMALY_TIME_THRESHOLD = 3         # seconds after which no vertical movement triggers anomaly
+    ANOMALY_DISTANCE_TOLERANCE = 0.1
+    ANOMALY_TIME_THRESHOLD = 2
 
     ARMS_UP_NUM_POLLS = ARMS_UP_EXPECTED_TIME / ARMS_UP_POLL_INTERVAL
     ARMS_UP_STEP_SIZE = ARMS_UP_MAX_RANGE / ARMS_UP_NUM_POLLS
@@ -125,7 +140,7 @@ def arms_up(hug_left, hug_right, r_left, r_right, w_left, w_right):
     ARMS_UP_POSITION_TOLERANCE = ARMS_UP_STEP_SIZE / 2
 
     HAND_STUCK_THRESH = 1.75
-    HAND_TIGHTEN_STEP = 0.025
+    HAND_TIGHTEN_STEP = 0.03
     HAND_LOOSEN_STEP_LEFT = 0.0075
     HAND_LOOSEN_STEP_RIGHT = 0.0075
     HAND_STUCK_FRAMES = 10
@@ -167,10 +182,10 @@ def arms_up(hug_left, hug_right, r_left, r_right, w_left, w_right):
                 if time.time() - last_loosen >= 0.1:
                     if sign == 1:
                         hand_pos -= HAND_LOOSEN_STEP_LEFT * sign
-                        print("LOOSEN LEFT")
+                        # print("LOOSEN LEFT")
                     else:
                         hand_pos -= HAND_LOOSEN_STEP_RIGHT * sign
-                        print("LOOSEN RIGHT")
+                        # print("LOOSEN RIGHT")
                     last_loosen = time.time()
             elif tighten_allowed:
                 hand_pos += HAND_TIGHTEN_STEP * sign
@@ -201,17 +216,19 @@ def arms_up(hug_left, hug_right, r_left, r_right, w_left, w_right):
                     if abs(actual_pos) <= ARMS_UP_POSITION_TOLERANCE:
                         return
 
-                    if abs(actual_pos - last_refresh_pos) < ARMS_UP_STALL_THRESHOLD:
+                    if abs(actual_pos - last_refresh_pos) < ANOMALY_DISTANCE_TOLERANCE:
                         stall_count += 1
                         if stall_count >= ANOMALY_QUALIFICATION_LIMIT:
                             if sign == 1:
                                 ANOMALY_DETECTED = True
-                                requests.post(API_URL + "/api/left-anomaly")
                                 print("LEFT ANOMALY")
+                                say("What is in your right pocket?")
+                                requests.post(API_URL + "/api/left-anomaly")
                             else:
                                 ANOMALY_DETECTED = True
-                                requests.post(API_URL + "/api/right-anomaly")
                                 print("RIGHT ANOMALY")
+                                say("What is in your left pocket?")
+                                requests.post(API_URL + "/api/right-anomaly")
                         if stall_count >= ARMS_UP_STALL_LIMIT:
                             return  # arm stuck, stop pushing
                     else:
@@ -233,6 +250,7 @@ def arms_up(hug_left, hug_right, r_left, r_right, w_left, w_right):
 
     t_left.join()
     t_right.join()
+    say("Clear. You may proceed.")
 
 def main():
     global REMOTE_START, ANOMALY_DETECTED
@@ -278,6 +296,13 @@ def main():
                 time.sleep(0.01)
             hug_right = r_right.data['pos'].copy()
 
+            torque_left = r_left.data['torque'].copy()
+            torque_left[0] = torque_left[0] * 0.75
+            torque_right = r_right.data['torque'].copy()
+            torque_right[0] = torque_right[0] * 0.75
+            w_left['tau'] = torque_left
+            w_right['tau'] = torque_right
+
             # move arms vertically to scan the body
             # adjust hand joint so hand folds in/out to allow smooth scan
             # vertical torque is used to detect if hand is stuck to loosen hand
@@ -286,6 +311,7 @@ def main():
             thread_arm_up.join()
 
             if not ANOMALY_DETECTED:
+                print("NO ANOMALY")
                 requests.post(API_URL + "/api/no-anomaly")
 
             # attempt to reset hand position
