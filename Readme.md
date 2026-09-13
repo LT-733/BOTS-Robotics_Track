@@ -3,8 +3,15 @@
 
 ## How to Run
 
-### Frontend
 
+### Backend
+
+```bash
+cd bbapps/final
+uv run main.py
+```
+
+### Frontend
 ```bash
 cd bbapps/proton_microexpress/
 uv run --python .venv/bin/python dashboard/camera_server.py
