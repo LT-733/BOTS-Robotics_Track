@@ -15,6 +15,8 @@ const cameraEls = {
   right: document.getElementById("rightCamera")
 };
 
+const previousButtonStates = {};
+
 const cameraState = {
   main: null,
   left: null,
@@ -196,6 +198,8 @@ function updateSystemStatus() {
 }
 
 function setDecision(pass, source) {
+  flashDecision(pass ? "pass" : "fail");
+
   if (source) {
     addEvent(
       `Subject ${pass ? "passed" : "failed"}`,
@@ -400,14 +404,38 @@ async function pollTelemetry() {
     }
 
     const data = await response.json();
+    const buttons = data.buttons || {};
 
-    if (data.buttons?.left_anomaly === 1) {
+    const leftAnomalyReceived =
+      buttons.left_anomaly === 1 &&
+      previousButtonStates.left_anomaly !== 1;
+
+    const rightAnomalyReceived =
+      buttons.right_anomaly === 1 &&
+      previousButtonStates.right_anomaly !== 1;
+
+    const passReceived =
+      (buttons.pass === 1 &&
+        previousButtonStates.pass !== 1) ||
+      (buttons.no_anomolay === 1 &&
+        previousButtonStates.no_anomolay !== 1);
+
+    if (buttons.left_anomaly === 1) {
       setAnomaly("left", true);
     }
 
-    if (data.buttons?.right_anomaly === 1) {
+    if (buttons.right_anomaly === 1) {
       setAnomaly("right", true);
     }
+
+    // Anomaly takes priority over a pass signal.
+    if (leftAnomalyReceived || rightAnomalyReceived) {
+      flashDecision("fail");
+    } else if (passReceived) {
+      flashDecision("pass");
+    }
+
+    Object.assign(previousButtonStates, buttons);
 
     showArm("left", data.left);
     showArm("right", data.right);
@@ -453,6 +481,25 @@ async function startBackend() {
       "ALERT"
     );
   }
+}
+
+const decisionTimers = {};
+
+
+function flashDecision(decision) {
+  const button = document.getElementById(
+    decision === "pass" ? "passButton" : "failButton"
+  );
+  const className = `decision-${decision}-active`;
+
+  button.classList.remove(className);
+  void button.offsetWidth;
+  button.classList.add(className);
+
+  clearTimeout(decisionTimers[decision]);
+  decisionTimers[decision] = setTimeout(() => {
+    button.classList.remove(className);
+  }, 3000);
 }
 
 

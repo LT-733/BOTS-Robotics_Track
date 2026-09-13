@@ -20,7 +20,7 @@ STATUS_PATH = Path(__file__).with_name("led_status.json")
 MIN_DISTANCE_M = 0.20
 MAX_DISTANCE_M = 0.35
 COLORS = {
-    "no_person": (0, 70, 255),
+    "no_person": (255, 255, 255),
     "too_far": (255, 0, 0),
     "ready": (90, 255, 120),
     "hugging": (0, 255, 0),

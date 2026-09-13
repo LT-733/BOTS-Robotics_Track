@@ -25,6 +25,9 @@ if str(BBOS_DIR) not in sys.path:
 from bbos import Config, Reader
 
 
+# Run with uv run --python .venv/bin/python dashboard/camera_server.py from parent dir
+# also run view_cameras.py and pose.py
+
 REMOTE_BASE = "http://127.0.0.1:8004"
 POSE_BASE = "http://127.0.0.1:9000"
 EXPRESSION_BASE = "http://127.0.0.1:9002"
@@ -41,9 +44,13 @@ LATEST = {
 BUTTON_STATES = {
     "left_anomaly": 0,
     "right_anomaly": 0,
+    "no_anomolay": 0,
     "fail": 0,
     "pass": 0,
 }
+
+BUTTON_ACTIVE_UNTIL = {}
+BUTTON_ACTIVE_SECONDS = 3
 
 LATEST_LOCK = threading.Lock()
 
@@ -154,6 +161,9 @@ def record_button(button_name: str, payload: Optional[ButtonPress]):
 
     with LATEST_LOCK:
         BUTTON_STATES[button_name] = 1
+        BUTTON_ACTIVE_UNTIL[button_name] = (
+            time.monotonic() + BUTTON_ACTIVE_SECONDS
+        )
 
     return {
         "button": button_name,
@@ -163,12 +173,16 @@ def record_button(button_name: str, payload: Optional[ButtonPress]):
 
 @app.post("/api/left-anomaly")
 def left_anomaly(payload: Optional[ButtonPress] = None):
-    return record_button("left_anomaly", payload)
+    return record_button("right_anomaly", payload)
 
 
 @app.post("/api/right-anomaly")
 def right_anomaly(payload: Optional[ButtonPress] = None):
-    return record_button("right_anomaly", payload)
+    return record_button("left_anomaly", payload)
+
+@app.post("/api/no-anomaly")
+def no_anomaly(payload: Optional[ButtonPress] = None):
+    return record_button("no_anomaly", payload)
 
 
 @app.post("/api/fail")
@@ -218,9 +232,15 @@ def panda():
     )
 
 
+
 @app.get("/data")
 def data():
     with LATEST_LOCK:
+        now = time.monotonic()
+
+        for button_name, active_until in BUTTON_ACTIVE_UNTIL.items():
+            BUTTON_STATES[button_name] = int(now < active_until)
+
         payload = dict(LATEST)
         payload["buttons"] = dict(BUTTON_STATES)
 

@@ -1,1 +1,1 @@
-{"mode": "too_far", "rgb": [255, 0, 0], "period_ms": 0, "distance_m": 0.9907598457411286, "people": 1, "range_m": [0.2, 0.35], "updated_ns": 1789299394739805475}
+{"mode": "no_person", "rgb": [255, 255, 255], "period_ms": 0, "distance_m": null, "people": 0, "range_m": [0.2, 0.35], "updated_ns": 1789309623631688457}
