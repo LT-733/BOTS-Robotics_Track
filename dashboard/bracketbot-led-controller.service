@@ -1,0 +1,13 @@
+[Unit]
+Description=BracketBot distance and hug LED controller
+After=network.target bracketbot-pose.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/bracketbot/bbapps/proton_microexpress
+ExecStart=/home/bracketbot/bbapps/proton_microexpress/.venv/bin/python /home/bracketbot/bbapps/proton_microexpress/led_controller.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bouncer</title>
+  <link rel="icon" type="image/png" href="/panda.png">
+  <link rel="apple-touch-icon" href="/panda.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"><link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#overview"><img src="panda.png" alt="Bouncer panda"><span>Bouncer</span></a>
+    <nav aria-label="Main navigation"><a class="active" href="#overview">Overview</a><a href="#cameras">Cameras</a><a href="#activity">Activity</a></nav>
+    <div class="system-pill"><i></i><span id="systemStatus">All systems operational</span></div>
+  </header>
+
+  <main class="dashboard" data-view="overview">
+    <section class="workspace" aria-label="Overview">
+      <div class="primary-column">
+        <article class="card pose-card">
+          <div class="card-heading"><h2>Triangulation</h2><div class="reading-strip"><div class="distance-banner" id="distanceBanner"><span>Distance:</span><strong id="poseDistance">--</strong></div><div class="expression-banner" id="expressionBanner"><span>Expression:</span><strong id="poseExpression">--</strong><small id="expressionConfidence"></small></div></div><span id="mainBadge" class="status-badge offline"><i></i> Offline</span></div>
+          <div class="pose-frame camera-viewport"><img id="mainCamera" alt="Triangulation camera"><button class="fullscreen-button" type="button" aria-label="Open triangulation camera fullscreen">⛶ Fullscreen</button></div>
+        </article>
+      </div>
+
+      <div class="camera-column">
+        <article class="card mini-camera"><div class="mini-heading"><span>Left camera</span><span id="leftBadge" class="status-badge offline"><i></i> Offline</span></div><div class="mini-frame camera-viewport"><img id="leftCamera" alt="Left camera"><button class="fullscreen-button" type="button" aria-label="Open left camera fullscreen">⛶ Fullscreen</button></div></article>
+        <article class="card mini-camera"><div class="mini-heading"><span>Right camera</span><span id="rightBadge" class="status-badge offline"><i></i> Offline</span></div><div class="mini-frame camera-viewport"><img id="rightCamera" alt="Right camera"><button class="fullscreen-button" type="button" aria-label="Open right camera fullscreen">⛶ Fullscreen</button></div></article>
+      </div>
+
+      <aside class="decision-column">
+        <article class="card skeleton-card">
+          <div class="card-heading compact"><h2>Skeleton</h2></div>
+          <div class="skeleton-placeholder">
+            <div class="skeleton-icon">
+              <span class="sk-head"></span><span class="sk-spine"></span>
+              <span class="sk-arm left"></span><span class="sk-arm right"></span>
+              <span class="sk-leg left"></span><span class="sk-leg right"></span>
+              <span id="leftAnomaly" class="anomaly-marker left" hidden>!</span>
+              <span id="rightAnomaly" class="anomaly-marker right" hidden>!</span>
+            </div>
+          </div>
+        </article>
+
+        <div class="anomaly-controls">
+          <button id="leftAnomalyButton" type="button">Left anomaly</button>
+          <button id="rightAnomalyButton" type="button">Right anomaly</button>
+          <button id="nextButton" type="button">Next</button>
+        </div>
+
+        <div class="decision-grid"><button id="failButton" class="decision fail">Fail</button><button id="passButton" class="decision pass">Pass</button><button id="autoButton" class="decision auto" disabled title="Automatic decisions are not connected yet">Auto unavailable</button></div>
+      </aside>
+
+      <article class="card extra-camera">
+        <div class="mini-heading"><span>Head · Raw stereo</span></div>
+        <div class="mini-frame camera-viewport"><img id="rawHeadCamera" alt="Raw head stereo fisheye camera"><button class="fullscreen-button" type="button" aria-label="Open raw stereo camera fullscreen">⛶ Fullscreen</button></div>
+      </article>
+      <article class="card extra-camera">
+        <div class="mini-heading"><span>Head · Left fisheye</span></div>
+        <div class="mini-frame camera-viewport lens-view lens-left"><img id="lensLeftCamera" alt="Left fisheye lens of head camera"><button class="fullscreen-button" type="button" aria-label="Open left fisheye fullscreen">⛶ Fullscreen</button></div>
+      </article>
+      <article class="card extra-camera">
+        <div class="mini-heading"><span>Head · Right fisheye</span></div>
+        <div class="mini-frame camera-viewport lens-view lens-right"><img id="lensRightCamera" alt="Right fisheye lens of head camera"><button class="fullscreen-button" type="button" aria-label="Open right fisheye fullscreen">⛶ Fullscreen</button></div>
+      </article>
+
+      <article class="card telemetry-card">
+        <div class="card-heading compact"><h2>Live telemetry</h2><span id="telemetryUpdated" class="data-stamp">Waiting</span></div>
+        <div class="telemetry-grid">
+          <section class="data-group"><h3>Perception</h3><dl><div><dt>Distance</dt><dd id="dataDistance">--</dd></div><div><dt>Bearing</dt><dd id="dataBearing">--</dd></div><div><dt>People</dt><dd id="dataPeople">0</dd></div><div><dt>LED mode</dt><dd id="dataLedMode">--</dd></div><div><dt>Py-Feat latency</dt><dd id="dataExpressionLatency">--</dd></div></dl></section>
+          <section class="data-group"><h3>Left arm end effector</h3><dl><div><dt>X</dt><dd id="leftX">--</dd></div><div><dt>Y</dt><dd id="leftY">--</dd></div><div><dt>Z</dt><dd id="leftZ">--</dd></div><div><dt>Sample age</dt><dd id="leftAge">--</dd></div></dl></section>
+          <section class="data-group"><h3>Right arm end effector</h3><dl><div><dt>X</dt><dd id="rightX">--</dd></div><div><dt>Y</dt><dd id="rightY">--</dd></div><div><dt>Z</dt><dd id="rightZ">--</dd></div><div><dt>Sample age</dt><dd id="rightAge">--</dd></div></dl></section>
+          <section class="data-group expression-data"><h3>Expression scores</h3><div id="expressionScoreGrid" class="score-grid"></div></section>
+        </div>
+      </article>
+
+      <article class="card log-card">
+        <div class="card-heading compact"><h2>Event log</h2><button id="clearLog" class="text-button">Clear</button></div>
+        <div id="eventLog" class="event-list" aria-live="polite"></div>
+      </article>
+
+      <article class="card health-card">
+        <div class="card-heading compact"><h2>Camera channels</h2></div>
+        <div class="channel-grid"><div><i id="channelMain"></i><span>Head / triangulation</span><strong id="channelMainText">Connecting</strong></div><div><i id="channelLeft"></i><span>Left wrist</span><strong id="channelLeftText">Connecting</strong></div><div><i id="channelRight"></i><span>Right wrist</span><strong id="channelRightText">Connecting</strong></div></div>
+      </article>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
