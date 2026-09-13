@@ -1,0 +1,190 @@
+# /// script
+# dependencies = ["bbos", "numpy<2"]
+# [tool.uv.sources]
+# bbos = { path = "/home/bracketbot/bbos", editable = true }
+# ///
+"""Recorded playback with refreshed feedback and latched cancellation.
+
+The IPC shutdown request is not a certified physical emergency stop. In
+particular, the installed daemon has automatic overcurrent recovery.
+"""
+import argparse
+from contextlib import ExitStack
+import json
+from pathlib import Path
+import signal
+import time
+
+import numpy as np
+
+RECORDING = Path(__file__).with_name("hug.json")
+VERSION = "fresh-feedback-stop-v1"
+SHUTDOWN_TORQUE_NM = 1.30
+POLL_SECONDS = 0.005
+MAX_FEEDBACK_AGE = 0.100
+
+
+class Cancelled(RuntimeError):
+    pass
+
+
+class TorqueGuard:
+    def __init__(self, readers, cfgs, clock=time.monotonic, wall=time.time):
+        self.readers, self.cfgs = readers, cfgs
+        self.clock, self.wall = clock, wall
+        self.samples = [None, None]
+        self.last_update = [clock(), clock()]
+        self.counts = [0, 0]
+        self.reason = None
+
+    def trip(self, reason):
+        self.reason = self.reason or reason
+        raise Cancelled(self.reason)
+
+    def poll(self):
+        if self.reason:
+            raise Cancelled(self.reason)
+        # Poll BOTH readers separately; a false left.ready() must not skip right.
+        fresh = [reader.ready() for reader in self.readers]
+        for side, (reader, cfg) in enumerate(zip(self.readers, self.cfgs)):
+            name = ("left", "right")[side]
+            if fresh[side]:
+                state = reader.data.copy()  # data alone does NOT refresh BBOS.
+                age = self.wall() - int(state['timestamp'].view('i8')) / 1e9
+                if not np.isfinite(age) or not -0.01 <= age <= MAX_FEEDBACK_AGE:
+                    self.trip(f"{name}: stale/invalid timestamp (age {age:.3f}s)")
+                for field in ('current', 'pos', 'vel'):
+                    values = np.asarray(state[field], dtype=float)
+                    if values.shape != (cfg.dof,) or not np.all(np.isfinite(values)):
+                        self.trip(f"{name}: invalid {field}")
+                current = np.asarray(state['current'], dtype=float)
+                torque = np.abs(current * np.asarray(cfg.kt, dtype=float))
+                joint = int(np.argmax(torque[1:7])) + 1
+                # Never exempt a surge while waiting for a peak/valley sequence.
+                # J0 is the lift and uses its configured current limit below.
+                if torque[joint] >= SHUTDOWN_TORQUE_NM:
+                    self.trip(f"{name} J{joint}: {torque[joint]:.4f} Nm >= 1.30 Nm")
+                if np.any(np.abs(current) >= np.asarray(cfg.hard_current_limit)):
+                    self.trip(f"{name}: configured motor current limit")
+                self.samples[side] = state
+                self.last_update[side] = self.clock()
+                self.counts[side] += 1
+            elif self.clock() - self.last_update[side] >= MAX_FEEDBACK_AGE:
+                self.trip(f"{name}: feedback stopped updating")
+        return all(sample is not None for sample in self.samples)
+
+
+def watch_until(deadline, guard):
+    while True:
+        guard.poll()
+        remaining = deadline - guard.clock()
+        if remaining <= 0:
+            return
+        time.sleep(min(POLL_SECONDS, remaining))
+
+
+def playback(frames, controls, guard):
+    start = guard.clock()
+    for frame in frames:
+        watch_until(start + frame['t'], guard)
+        for writer, sign in zip(controls, (1, -1)):
+            guard.poll()  # cancellation precedes each new position command
+            writer['pos'] = sign * np.asarray(frame['left'], dtype=np.float32)
+
+
+def publish_off(writers):
+    errors = []
+    for _ in range(3):
+        for writer in writers:
+            try:
+                writer['enable'] = np.zeros(8, dtype=np.bool_)
+            except Exception as error:
+                errors.append(str(error))
+        time.sleep(0.01)
+    if errors:
+        print('TORQUE-OFF REQUEST FAILED: ' + '; '.join(errors), flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--monitor-seconds', type=float,
+                        help='read-only diagnostic: creates no motor writers')
+    args = parser.parse_args()
+    from bbos import Config, Reader, Type, Writer
+    cfgs = [Config('arm_left'), Config('arm_right')]
+    print(f'{VERSION} — {Path(__file__).resolve()}', flush=True)
+    print('J1–J6 cancellation: 1.30 Nm on any fresh sample; J0 uses its own current limit.', flush=True)
+
+    # BBOS __exit__ returns True and suppresses exceptions. Call cleanup via
+    # callbacks so cancellation/KeyboardInterrupt retain their exit status.
+    with ExitStack() as stack:
+        readers = [Reader(name + '.state', keeptime=False) for name in ('arm_left', 'arm_right')]
+        for reader in readers:
+            stack.callback(reader.__exit__, None, None, None)
+        guard = TorqueGuard(readers, cfgs)
+        deadline = time.monotonic() + 1.0
+        while not guard.poll():
+            if time.monotonic() >= deadline:
+                raise Cancelled('No initial arm feedback')
+            time.sleep(POLL_SECONDS)
+
+        if args.monitor_seconds is not None:
+            if not np.isfinite(args.monitor_seconds) or args.monitor_seconds <= 0:
+                parser.error('--monitor-seconds must be positive')
+            watch_until(time.monotonic() + args.monitor_seconds, guard)
+            print(f'READ ONLY: fresh left/right samples = {guard.counts}; no motor commands.', flush=True)
+            return
+
+        frames = json.loads(RECORDING.read_text())['frames']
+        previous = -1.0
+        for frame in frames:
+            t = frame['t']
+            if not np.isfinite(t) or t < 0 or t < previous:
+                raise ValueError('Invalid recording timestamps')
+            pos = np.asarray(frame['left'], dtype=float)
+            if pos.shape != (8,) or not np.all(np.isfinite(pos)):
+                raise ValueError('Invalid recorded position')
+            previous = t
+        if not frames:
+            return
+
+        torque_writers = []
+        # Cleanup registered first, executed before writer destruction below.
+        def create_writer(name):
+            writer = Writer(name, Type('arm_torque' if name.endswith('.torque') else 'arm_ctrl'), keeptime=False)
+            stack.callback(writer.__exit__, None, None, None)
+            return writer
+
+        try:
+            # Establish torque-off BEFORE opening position-command topics.
+            for name in ('arm_left', 'arm_right'):
+                writer = create_writer(name + '.torque')
+                torque_writers.append(writer)
+                writer['enable'] = np.zeros(8, dtype=np.bool_)
+            watch_until(time.monotonic() + 0.1, guard)
+            controls = [create_writer(name + '.ctrl') for name in ('arm_left', 'arm_right')]
+            for side, writer in enumerate(controls):
+                guard.poll()
+                writer['pos'] = np.asarray(guard.samples[side]['pos'], dtype=np.float32).copy()
+            watch_until(time.monotonic() + 0.1, guard)
+            for writer in torque_writers:
+                guard.poll()
+                writer['enable'] = np.ones(8, dtype=np.bool_)
+            print('Playing with continuous feedback checks...', flush=True)
+            playback(frames, controls, guard)
+            print('Recording completed.', flush=True)
+        finally:
+            # No subsequent playback, vertical wave, or automatic re-enable.
+            publish_off(torque_writers)
+            print('Torque-off requested; closing command topics. Physical stop is not acknowledged by BBOS.', flush=True)
+
+
+if __name__ == '__main__':
+    def terminate(signum, frame):
+        raise Cancelled(f'termination signal {signum}')
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        main()
+    except (Cancelled, KeyboardInterrupt) as error:
+        print(f'CANCELLED: {error or "Ctrl+C"}', flush=True)
+        raise SystemExit(2)
